@@ -1,0 +1,15 @@
+[package]
+name = "nyarr-bin"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+path = "src/main.rs"
+name = "nyarr"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "3.2.8", features = ["derive"] }
+color-eyre = { version = "0.6.2", features = [] }
+nyarr = { version = "0.1.0", path = ".." }
