@@ -1,2 +1,2 @@
 [workspace]
-members = ["crates/gridlock", "crates/nyarr", "crates/nyarr/bin"]
+members = ["crates/*"]

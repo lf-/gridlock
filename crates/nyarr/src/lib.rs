@@ -1,6 +1,7 @@
 //! Virtual filesystem backed NAR file library.
 //!
 //! See Figure 5.2 of Eelco's thesis for details.
+pub mod hash;
 pub mod tar;
 
 use std::{collections::BTreeMap, fmt, io::Write};

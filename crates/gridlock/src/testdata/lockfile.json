@@ -1,0 +1,27 @@
+{
+    "version": 0,
+    "packages": {
+        "package1": {
+            "branch": "main",
+            "description": "An asyncio library for bspwm",
+            "homepage": "",
+            "owner": "lf-",
+            "repo": "aiobspwm",
+            "rev": "fa0a22bb28c5ca5f1704a050a0bd9e3e6c9b6631",
+            "sha256": "0iamz4nfy4r6zryr1id5yb2s1b37lfr9jnn4c612mh91asli96b4",
+            "type": "tarball",
+            "url": "https://github.com/lf-/aiobspwm/archive/fa0a22bb28c5ca5f1704a050a0bd9e3e6c9b6631.tar.gz"
+        },
+        "package2": {
+            "branch": "main",
+            "description": "An asyncio text-based panel",
+            "homepage": "",
+            "owner": "lf-",
+            "repo": "aiopanel",
+            "rev": "1d8d0e0015b0990506213af23651edb29a09835c",
+            "sha256": "0xai9pdsx5lsxvwwc1553bdrmnm17fgsyndwjrlrg2hbf8wpvla0",
+            "type": "tarball",
+            "url": "https://github.com/lf-/aiopanel/archive/1d8d0e0015b0990506213af23651edb29a09835c.tar.gz"
+        }
+    }
+}
