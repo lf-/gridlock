@@ -13,3 +13,4 @@ name = "nyarr"
 clap = { version = "3.2.8", features = ["derive"] }
 color-eyre = { version = "0.6.2", features = [] }
 nyarr = { version = "0.1.0", path = ".." }
+tempfile = "3.3.0"

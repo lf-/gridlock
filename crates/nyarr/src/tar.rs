@@ -5,6 +5,7 @@ use std::{
     io::{Read, Seek, Write},
 };
 
+use crate::Error;
 use crate::{ConstByteStream, Directory, Executable, FileName, FsObject};
 
 /// FIXME: maybe don't use a ConstByteStream since it forces reading the entire
@@ -18,9 +19,7 @@ use crate::{ConstByteStream, Directory, Executable, FileName, FsObject};
 ///
 /// This seems to suggest that you can't random-read, sequential-write. Odd. So
 /// I guess we are reading it all into memory.
-pub fn tar_to_fsobject(
-    tar: impl Read + Seek,
-) -> Result<FsObject<ConstByteStream>, Box<dyn std::error::Error>> {
+pub fn tar_to_fsobject(tar: impl Read + Seek) -> Result<FsObject<ConstByteStream>, Error> {
     let mut archive = tar::Archive::new(tar);
     let mut tree = Directory(BTreeMap::default());
 
@@ -62,10 +61,7 @@ pub fn tar_to_fsobject(
     Ok(FsObject::Directory(tree))
 }
 
-pub fn tar_to_nar(
-    tar: impl Read + Seek,
-    mut into: impl Write,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn tar_to_nar(tar: impl Read + Seek, mut into: impl Write) -> Result<(), Error> {
     let fso = tar_to_fsobject(tar)?;
 
     fso.serialise_toplevel(&mut into)?;

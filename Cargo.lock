@@ -969,6 +969,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "nyarr",
+ "tempfile",
 ]
 
 [[package]]

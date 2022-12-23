@@ -5,6 +5,8 @@ pub mod tar;
 
 use std::{collections::BTreeMap, fmt, io::Write};
 
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Executable {
     IsExecutable,
@@ -193,11 +195,7 @@ fn str(s: &[u8], w: &mut impl Write) -> WriteResult {
 }
 
 impl<T: ByteStream> Directory<T> {
-    pub fn insert(
-        &mut self,
-        path: &FileName,
-        obj: FsObject<T>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn insert(&mut self, path: &FileName, obj: FsObject<T>) -> Result<(), Error> {
         match &path.0.as_slice() {
             &[one] => {
                 // base case, a file at the root relative to me
