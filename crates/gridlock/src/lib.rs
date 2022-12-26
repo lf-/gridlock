@@ -1,12 +1,19 @@
 //! The gridlock tool itself. This component manages lock files and the
 //! updating thereof.
 
-use std::{collections::BTreeMap, fs, io::Cursor, path::Path, process::Stdio};
+use std::{
+    collections::BTreeMap,
+    io::{Cursor, Read},
+    path::Path,
+    process::Stdio,
+};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use color_eyre::eyre::{eyre, Context};
+use regex::Regex;
 use serde::{de::Visitor, Deserialize, Serialize, Serializer};
+use tokio::{fs, io::AsyncWriteExt};
 
 /// Lockfile format, loosely based on Niv's format, since it's simple and
 /// mostly a good design.
@@ -46,6 +53,14 @@ impl<'de> Deserialize<'de> for UnixTimestamp {
                     )?,
                     Utc,
                 )))
+            }
+
+            // since serde_json tries u64 first and then type errors (lol)
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_i64(v as i64)
             }
         }
 
@@ -87,8 +102,8 @@ pub trait GitHubClient {
         &self,
         owner: &str,
         repo: &str,
-        branch_name: &str,
-    ) -> color_eyre::Result<GitRevision>;
+        branch_name: Option<&str>,
+    ) -> color_eyre::Result<(String, GitRevision)>;
 
     async fn create_lock(
         &self,
@@ -113,29 +128,99 @@ impl OnlineGitHubClient {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum GitLsRemoteLine {
+    SymRef { target: String, name: String },
+    Branch { rev: String, target: String },
+}
+
+/// ```notrust
+/// » git ls-remote --symref . HEAD
+/// ref: refs/heads/main    HEAD
+/// 59f5c322b48409c4d6d08cecae50b663151b22ed        HEAD
+/// ref: refs/remotes/origin/main   refs/remotes/origin/HEAD
+/// 59f5c322b48409c4d6d08cecae50b663151b22ed        refs/remotes/origin/HEAD
+/// ```
+fn parse_git_ls_remote_line(input: &str) -> color_eyre::Result<GitLsRemoteLine> {
+    lazy_static::lazy_static! {
+        static ref REF_RE: Regex = Regex::new(r#"ref: ([^\s]+)\s+([^\s]+)"#).unwrap();
+        static ref TIP_RE: Regex = Regex::new(r#"([0-9a-f]+)\s+([^\s]+)"#).unwrap();
+    };
+
+    if let Some(refs) = REF_RE.captures(input) {
+        Ok(GitLsRemoteLine::SymRef {
+            target: refs[1].to_string(),
+            name: refs[2].to_string(),
+        })
+    } else if let Some(tip) = TIP_RE.captures(input) {
+        Ok(GitLsRemoteLine::Branch {
+            rev: tip[1].to_string(),
+            target: tip[2].to_string(),
+        })
+    } else {
+        Err(eyre!(
+            "could not parse line of git ls-remote output: {input:?}"
+        ))
+    }
+}
+
+async fn git_branch_head(
+    remote: &str,
+    branch_name: Option<&str>,
+) -> color_eyre::Result<(GitRevision, String)> {
+    // not confident this is the right approach/will not get us hosed by
+    // rate limits
+    let proc = tokio::process::Command::new("git")
+        .arg("ls-remote")
+        .arg("--symref")
+        .arg(remote)
+        .arg(branch_name.unwrap_or("HEAD"))
+        .stdout(Stdio::piped())
+        .output()
+        .await?;
+
+    let parsed = std::str::from_utf8(&proc.stdout)
+        .context("utf8 decode git ls-remote")?
+        .lines()
+        .map(parse_git_ls_remote_line)
+        .collect::<color_eyre::Result<Vec<GitLsRemoteLine>>>()?;
+
+    let def_branch = parsed
+        .iter()
+        .find_map(|l| match l {
+            GitLsRemoteLine::SymRef { target, .. } => {
+                Some(target.strip_prefix("refs/heads/").unwrap_or(target))
+            }
+            _ => None,
+        })
+        .map(|s| s.to_string());
+
+    let val = parsed
+        .iter()
+        .find_map(|l| match l {
+            GitLsRemoteLine::Branch { rev, .. } => Some(rev),
+            _ => None,
+        })
+        .cloned()
+        .ok_or_else(|| eyre!("didn't get a branch line in {parsed:?}"))?;
+
+    let branch_name = match branch_name {
+        Some(v) => v.to_string(),
+        None => def_branch.ok_or_else(|| eyre!("no default branch name"))?,
+    };
+
+    Ok((val, branch_name))
+}
+
 #[async_trait]
 impl GitHubClient for OnlineGitHubClient {
     async fn branch_head(
         &self,
         owner: &str,
         repo: &str,
-        branch_name: &str,
-    ) -> color_eyre::Result<GitRevision> {
-        // not confident this is the right approach/will not get us hosed by
-        // rate limits
-        let proc = tokio::process::Command::new("git")
-            .arg("ls-remote")
-            .arg(format!("https://github.com/{owner}/{repo}"))
-            .arg(branch_name)
-            .stdout(Stdio::piped())
-            .output()
-            .await?;
-        let val = proc
-            .stdout
-            .splitn(2, |&v| v.is_ascii_whitespace())
-            .next()
-            .ok_or(eyre!("bad stdout"))?;
-        Ok(String::from_utf8(val.to_vec())?)
+        branch_name: Option<&str>,
+    ) -> color_eyre::Result<(GitRevision, String)> {
+        git_branch_head(&format!("https://github.com/{owner}/{repo}"), branch_name).await
     }
 
     async fn create_lock(
@@ -149,8 +234,13 @@ impl GitHubClient for OnlineGitHubClient {
         let resp = self.client.get(&url).send().await?.bytes().await?;
         let content = resp.to_vec();
 
+        fs::write("content.tar.gz", &content).await?;
+        let mut decoder = flate2::read::GzDecoder::new(Cursor::new(&content));
+        let mut content = Vec::new();
+        decoder.read_to_end(&mut content)?;
+
         let mut hasher = nyarr::hash::NarHasher::new();
-        nyarr::tar::tar_to_nar(Cursor::new(content), &mut hasher).map_err(|e| eyre!(e))?;
+        nyarr::tar::tar_to_nar(Cursor::new(&content), &mut hasher).map_err(|e| eyre!(e))?;
 
         Ok(Lock {
             owner: owner.into(),
@@ -189,8 +279,8 @@ pub async fn plan_update<C: GitHubClient>(
         ));
 
     for (name, lock) in it {
-        let branch_head = client
-            .branch_head(&lock.owner, &lock.repo, &lock.branch)
+        let (branch_head, _branch_name) = client
+            .branch_head(&lock.owner, &lock.repo, Some(&lock.branch))
             .await
             .context("getting branch head")?;
         if branch_head != lock.rev {
@@ -201,10 +291,23 @@ pub async fn plan_update<C: GitHubClient>(
     Ok(changes)
 }
 
-pub fn read_lockfile(path: &Path) -> color_eyre::Result<Lockfile> {
-    let content = fs::read(path).context("reading lockfile")?;
+pub async fn read_lockfile(path: &Path) -> color_eyre::Result<Lockfile> {
+    let content = fs::read(path).await.context("reading lockfile")?;
     let lockfile = serde_json::from_slice(&content)?;
     Ok(lockfile)
+}
+
+pub async fn write_lockfile(path: &Path, content: &Lockfile) -> color_eyre::Result<()> {
+    let new_path = path.with_extension(".tmp");
+    let mut h = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&new_path)
+        .await?;
+    let data = serde_json::to_vec(content)?;
+    h.write_all(&data).await?;
+    fs::rename(&new_path, path).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -227,14 +330,22 @@ mod test {
             &self,
             owner: &str,
             repo: &str,
-            branch_name: &str,
-        ) -> color_eyre::Result<crate::GitRevision> {
-            self.branch_maps
+            branch_name: Option<&str>,
+        ) -> color_eyre::Result<(crate::GitRevision, String)> {
+            let tip = self
+                .branch_maps
                 .get(&(owner.to_string(), repo.to_string()))
                 .ok_or_else(|| eyre!("unknown owner/repo {owner} {repo}"))?
-                .get(branch_name)
-                .ok_or_else(|| eyre!("unknown branch {branch_name}"))
-                .cloned()
+                .get(branch_name.unwrap_or("main"))
+                .ok_or_else(|| eyre!("unknown branch {branch_name:?}"))
+                .cloned()?;
+
+            Ok((
+                tip,
+                branch_name
+                    .map(|s| s.to_string())
+                    .unwrap_or("main".to_string()),
+            ))
         }
 
         async fn create_lock(
@@ -310,6 +421,42 @@ mod test {
                     "package2".into(),
                     "cccccccccccccccccccccccccccccccccccccccc".into()
                 )
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ls_remote_parsing() {
+        let input = "\
+ref: refs/heads/main    HEAD
+59f5c322b48409c4d6d08cecae50b663151b22ed        HEAD
+ref: refs/remotes/origin/main   refs/remotes/origin/HEAD
+59f5c322b48409c4d6d08cecae50b663151b22ed        refs/remotes/origin/HEAD
+";
+        let lines = input
+            .lines()
+            .map(parse_git_ls_remote_line)
+            .collect::<color_eyre::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                GitLsRemoteLine::SymRef {
+                    target: "refs/heads/main".into(),
+                    name: "HEAD".into()
+                },
+                GitLsRemoteLine::Branch {
+                    rev: "59f5c322b48409c4d6d08cecae50b663151b22ed".into(),
+                    target: "HEAD".into()
+                },
+                GitLsRemoteLine::SymRef {
+                    target: "refs/remotes/origin/main".into(),
+                    name: "refs/remotes/origin/HEAD".into()
+                },
+                GitLsRemoteLine::Branch {
+                    rev: "59f5c322b48409c4d6d08cecae50b663151b22ed".into(),
+                    target: "refs/remotes/origin/HEAD".into()
+                }
             ]
         );
     }

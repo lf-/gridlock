@@ -9,11 +9,14 @@ edition = "2021"
 async-trait = "0.1.60"
 chrono = "0.4.23"
 color-eyre = "0.6.2"
+flate2 = "1.0.25"
+lazy_static = "1.4.0"
 nyarr = { version = "0.1.0", path = "../nyarr" }
+regex = "1.4.5"
 reqwest = "0.11.13"
 serde = { version = "1.0.151", features = ["derive"] }
 serde_json = "1.0.91"
-tokio = { version = "1.23.0", features = ["process"] }
+tokio = { version = "1.23.0", features = ["process", "fs"] }
 
 [dev-dependencies]
-tokio = { version = "1.23.0", features = ["macros", "rt"] }
+tokio = { version = "1.23.0", features = ["macros", "rt", "fs", "process"] }

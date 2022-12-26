@@ -3,10 +3,37 @@
 //! See Figure 5.2 of Eelco's thesis for details.
 pub mod hash;
 pub mod tar;
+use thiserror::Error;
 
-use std::{collections::BTreeMap, fmt, io::Write};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    io::{self, Write},
+    panic::Location,
+};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
+
+#[derive(Error, Debug)]
+pub enum Tar2NarError {
+    #[error("IO error {0} at {1}")]
+    Io(io::Error, &'static Location<'static>),
+    #[error("Unknown error {0} at {1}")]
+    Unknown(
+        Box<dyn std::error::Error + Send + Sync>,
+        &'static Location<'static>,
+    ),
+}
+
+#[track_caller]
+pub(crate) fn io_error(ioe: io::Error) -> Tar2NarError {
+    Tar2NarError::Io(ioe, std::panic::Location::caller())
+}
+
+#[track_caller]
+pub(crate) fn unk_error(err: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Tar2NarError {
+    Tar2NarError::Unknown(err.into(), std::panic::Location::caller())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Executable {

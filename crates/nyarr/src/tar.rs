@@ -5,8 +5,8 @@ use std::{
     io::{Read, Seek, Write},
 };
 
-use crate::Error;
-use crate::{ConstByteStream, Directory, Executable, FileName, FsObject};
+use crate::{io_error, unk_error, ConstByteStream, Directory, Executable, FileName, FsObject};
+use crate::{Error, Tar2NarError};
 
 /// FIXME: maybe don't use a ConstByteStream since it forces reading the entire
 /// thing into memory. It's unclear how to do this with Seek, since the `tar`
@@ -19,22 +19,22 @@ use crate::{ConstByteStream, Directory, Executable, FileName, FsObject};
 ///
 /// This seems to suggest that you can't random-read, sequential-write. Odd. So
 /// I guess we are reading it all into memory.
-pub fn tar_to_fsobject(tar: impl Read + Seek) -> Result<FsObject<ConstByteStream>, Error> {
+pub fn tar_to_fsobject(tar: impl Read + Seek) -> Result<FsObject<ConstByteStream>, Tar2NarError> {
     let mut archive = tar::Archive::new(tar);
     let mut tree = Directory(BTreeMap::default());
 
-    for member in archive.entries_with_seek()? {
-        let mut member = member?;
+    for member in archive.entries_with_seek().map_err(|e| io_error(e))? {
+        let mut member = member.map_err(|e| io_error(e))?;
         let entry_type = member.header().entry_type();
 
         let obj = if entry_type.is_dir() {
             FsObject::Directory(Directory::default())
         } else if entry_type.is_file() {
             let mut v = Vec::new();
-            member.read_to_end(&mut v)?;
+            member.read_to_end(&mut v).map_err(|e| io_error(e))?;
 
             FsObject::File(
-                if member.header().mode()? & 0o111 != 0 {
+                if member.header().mode().map_err(|e| io_error(e))? & 0o111 != 0 {
                     Executable::IsExecutable
                 } else {
                     Executable::NotExecutable
@@ -42,8 +42,11 @@ pub fn tar_to_fsobject(tar: impl Read + Seek) -> Result<FsObject<ConstByteStream
                 ConstByteStream(v),
             )
         } else if entry_type.is_symlink() {
-            let name = member.link_name_bytes().ok_or("empty link name")?;
-            FsObject::Symlink(FileName::try_from(name.as_ref())?)
+            let name = member
+                .link_name_bytes()
+                .ok_or("empty link name")
+                .map_err(|e| unk_error(e))?;
+            FsObject::Symlink(FileName::try_from(name.as_ref()).map_err(|e| unk_error(e))?)
         } else {
             // idk what that is, let's skip it
             continue;
@@ -54,7 +57,7 @@ pub fn tar_to_fsobject(tar: impl Read + Seek) -> Result<FsObject<ConstByteStream
         if let Err(_) = name {
             // it's just a ./ entry. we can ignore it.
         } else if let Ok(name) = name {
-            tree.insert(name, obj)?;
+            tree.insert(name, obj).map_err(unk_error)?;
         }
     }
 

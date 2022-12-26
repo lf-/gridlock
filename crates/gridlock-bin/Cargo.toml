@@ -6,8 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chrono = "0.4.23"
 clap = { version = "4.0.32", features = ["derive"] }
 color-eyre = "0.6.2"
 gridlock = { version = "0.1.0", path = "../gridlock" }
+owo-colors = "3.4.0"
 reqwest = "0.11.13"
 tokio = { version = "1.23.0", features = ["full"] }

@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use gridlock::{plan_update, read_lockfile, OnlineGitHubClient};
+use gridlock::{
+    plan_update, read_lockfile, write_lockfile, GitHubClient, LockfileChange, OnlineGitHubClient,
+};
+use owo_colors::OwoColorize;
 
 #[derive(clap::Parser)]
 struct Args {
@@ -19,12 +22,55 @@ struct Update {
 }
 
 #[derive(clap::Parser)]
-enum Subcommand {
-    Update(Update),
+struct Add {
+    /// Owner/repo pair. For example, `lf-/gridlock`.
+    repo_ref: String,
+    /// Branch to use. By default we will use the default branch.
+    branch: Option<String>,
 }
 
-async fn do_update(lockfile: &Path, update: Update) -> color_eyre::Result<()> {
-    let lockfile = read_lockfile(lockfile)?;
+#[derive(clap::Parser)]
+enum Subcommand {
+    Update(Update),
+    Show,
+    Add(Add),
+}
+
+fn boldprint(head: &str, f: impl std::fmt::Display) {
+    println!("  {}: {}", head.bold(), f);
+}
+
+async fn do_show(lockfile_path: &Path) -> color_eyre::Result<()> {
+    let lockfile = read_lockfile(lockfile_path).await?;
+
+    for (name, package) in lockfile.packages {
+        println!("{name}");
+        boldprint("Branch", &package.branch);
+        boldprint("Rev", &package.rev);
+        boldprint(
+            "Last updated",
+            package
+                .last_updated
+                .map(|v| {
+                    v.0.with_timezone(&chrono::Local)
+                        .format("%F %T")
+                        .to_string()
+                })
+                .unwrap_or("Unknown".into()),
+        );
+        boldprint(
+            "Web link",
+            format!(
+                "https://github.com/{}/{}/tree/{}",
+                package.owner, package.repo, package.rev
+            ),
+        );
+    }
+    Ok(())
+}
+
+async fn do_update(lockfile_path: &Path, update: Update) -> color_eyre::Result<()> {
+    let mut lockfile = read_lockfile(lockfile_path).await?;
     let client = OnlineGitHubClient::new()?;
 
     let plan = plan_update(
@@ -32,10 +78,39 @@ async fn do_update(lockfile: &Path, update: Update) -> color_eyre::Result<()> {
         &lockfile,
         update.package_name.as_ref().map(String::as_str),
     )
-    .await;
+    .await?;
+    return Ok(());
+    // TODO
+    // let plan = vec![LockfileChange::UpdateRev(
+    //     "aiobspwm".into(),
+    //     "fa0a22bb28c5ca5f1704a050a0bd9e3e6c9b6631".into(),
+    // )];
 
     println!("Plan: {plan:?}");
 
+    for change in plan {
+        match change {
+            LockfileChange::UpdateRev(name, rev) => {
+                let p = lockfile.packages.get_mut(&name).unwrap();
+                let new_lock = client
+                    .create_lock(&p.owner, &p.repo, &p.branch, &rev)
+                    .await?;
+                *p = new_lock;
+            }
+        }
+    }
+
+    write_lockfile(lockfile_path, &lockfile).await?;
+
+    Ok(())
+}
+
+async fn do_add(lockfile_path: &Path, add: Add) -> color_eyre::Result<()> {
+    let client = OnlineGitHubClient::new()?;
+
+    println!("{:?}", client.branch_head("", "", Some("lol")).await);
+
+    // client
     Ok(())
 }
 
@@ -46,5 +121,7 @@ async fn main() -> color_eyre::Result<()> {
 
     match args.subcommand {
         Subcommand::Update(u) => do_update(&args.lockfile, u).await,
+        Subcommand::Show => do_show(&args.lockfile).await,
+        Subcommand::Add(a) => do_add(&args.lockfile, a).await,
     }
 }

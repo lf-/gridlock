@@ -10,6 +10,7 @@ base64 = "0.20.0"
 flate2 = "1.0.24"
 sha2 = "0.10.2"
 tar = "0.4.38"
+thiserror = { version = "1.0.37" }
 
 [dev-dependencies]
 hexdump = { path = "../hexdump" }
