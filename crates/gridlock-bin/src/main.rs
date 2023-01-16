@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use color_eyre::eyre::eyre;
 use gridlock::{
     plan_update, read_lockfile, write_lockfile, GitHubClient, LockfileChange, OnlineGitHubClient,
 };
@@ -107,6 +108,17 @@ async fn do_update(lockfile_path: &Path, update: Update) -> color_eyre::Result<(
 
 async fn do_add(lockfile_path: &Path, add: Add) -> color_eyre::Result<()> {
     let client = OnlineGitHubClient::new()?;
+
+    let (owner, repo) = add
+        .repo_ref
+        .split_once('/')
+        .ok_or_else(|| eyre!("Repo ref should be formatted like 'owner/repo'"))?;
+
+    let (head, branch_name) = client
+        .branch_head(owner, repo, add.branch.as_deref())
+        .await?;
+
+    println!("Adding {owner}/{repo} at {branch_name}: {head}");
 
     println!("{:?}", client.branch_head("", "", Some("lol")).await);
 
