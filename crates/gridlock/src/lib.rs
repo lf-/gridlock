@@ -2,7 +2,7 @@
 //! updating thereof.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     io::{Cursor, Read},
     path::Path,
     process::Stdio,
@@ -13,7 +13,10 @@ use chrono::Utc;
 use color_eyre::eyre::{eyre, Context};
 use regex::Regex;
 use serde::{de::Visitor, Deserialize, Serialize, Serializer};
+use serde_json::Value;
 use tokio::{fs, io::AsyncWriteExt};
+
+const LOCKFILE_VERSION: u16 = 0;
 
 /// Lockfile format, loosely based on Niv's format, since it's simple and
 /// mostly a good design.
@@ -21,6 +24,18 @@ use tokio::{fs, io::AsyncWriteExt};
 pub struct Lockfile {
     pub packages: BTreeMap<String, Lock>,
     pub version: u16,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+impl Default for Lockfile {
+    fn default() -> Self {
+        Lockfile {
+            packages: Default::default(),
+            version: LOCKFILE_VERSION,
+            extra: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -88,6 +103,8 @@ pub struct Lock {
     pub sha256: String,
     pub last_updated: Option<UnixTimestamp>,
     pub url: String,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 fn archive_url(owner: &str, repo: &str, rev: &str) -> String {
@@ -234,7 +251,8 @@ impl GitHubClient for OnlineGitHubClient {
         let resp = self.client.get(&url).send().await?.bytes().await?;
         let content = resp.to_vec();
 
-        fs::write("content.tar.gz", &content).await?;
+        // FIXME: add a debug option to put this tarball on disk
+        // fs::write("content.tar.gz", &content).await?;
         let mut decoder = flate2::read::GzDecoder::new(Cursor::new(&content));
         let mut content = Vec::new();
         decoder.read_to_end(&mut content)?;
@@ -250,6 +268,7 @@ impl GitHubClient for OnlineGitHubClient {
             url,
             last_updated: Some(UnixTimestamp(Utc::now())),
             sha256: hasher.digest(),
+            extra: Default::default(),
         })
     }
 }

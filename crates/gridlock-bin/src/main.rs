@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::eyre;
 use gridlock::{
-    plan_update, read_lockfile, write_lockfile, GitHubClient, LockfileChange, OnlineGitHubClient,
+    plan_update, read_lockfile, write_lockfile, GitHubClient, Lock, Lockfile, LockfileChange,
+    OnlineGitHubClient,
 };
 use owo_colors::OwoColorize;
 
@@ -28,6 +29,8 @@ struct Add {
     repo_ref: String,
     /// Branch to use. By default we will use the default branch.
     branch: Option<String>,
+    /// Name to use for this package. Defaults to the repository name.
+    name: Option<String>,
 }
 
 #[derive(clap::Parser)]
@@ -35,6 +38,7 @@ enum Subcommand {
     Update(Update),
     Show,
     Add(Add),
+    Init,
 }
 
 fn boldprint(head: &str, f: impl std::fmt::Display) {
@@ -80,12 +84,6 @@ async fn do_update(lockfile_path: &Path, update: Update) -> color_eyre::Result<(
         update.package_name.as_ref().map(String::as_str),
     )
     .await?;
-    return Ok(());
-    // TODO
-    // let plan = vec![LockfileChange::UpdateRev(
-    //     "aiobspwm".into(),
-    //     "fa0a22bb28c5ca5f1704a050a0bd9e3e6c9b6631".into(),
-    // )];
 
     println!("Plan: {plan:?}");
 
@@ -96,7 +94,10 @@ async fn do_update(lockfile_path: &Path, update: Update) -> color_eyre::Result<(
                 let new_lock = client
                     .create_lock(&p.owner, &p.repo, &p.branch, &rev)
                     .await?;
-                *p = new_lock;
+                *p = Lock {
+                    extra: std::mem::take(&mut p.extra),
+                    ..new_lock
+                };
             }
         }
     }
@@ -109,6 +110,8 @@ async fn do_update(lockfile_path: &Path, update: Update) -> color_eyre::Result<(
 async fn do_add(lockfile_path: &Path, add: Add) -> color_eyre::Result<()> {
     let client = OnlineGitHubClient::new()?;
 
+    let mut lockfile = read_lockfile(lockfile_path).await?;
+
     let (owner, repo) = add
         .repo_ref
         .split_once('/')
@@ -118,11 +121,23 @@ async fn do_add(lockfile_path: &Path, add: Add) -> color_eyre::Result<()> {
         .branch_head(owner, repo, add.branch.as_deref())
         .await?;
 
+    let item_name = add.name.unwrap_or_else(|| repo.to_string());
+
     println!("Adding {owner}/{repo} at {branch_name}: {head}");
+    let lock = client.create_lock(owner, repo, &branch_name, &head).await?;
 
-    println!("{:?}", client.branch_head("", "", Some("lol")).await);
+    // FIXME: should "add" update?
+    lockfile.packages.insert(item_name, lock);
 
-    // client
+    write_lockfile(lockfile_path, &lockfile).await?;
+
+    Ok(())
+}
+
+async fn do_init(lockfile_path: &Path) -> color_eyre::Result<()> {
+    let lockfile = Lockfile::default();
+    write_lockfile(lockfile_path, &lockfile).await?;
+
     Ok(())
 }
 
@@ -135,5 +150,6 @@ async fn main() -> color_eyre::Result<()> {
         Subcommand::Update(u) => do_update(&args.lockfile, u).await,
         Subcommand::Show => do_show(&args.lockfile).await,
         Subcommand::Add(a) => do_add(&args.lockfile, a).await,
+        Subcommand::Init => do_init(&args.lockfile).await,
     }
 }
