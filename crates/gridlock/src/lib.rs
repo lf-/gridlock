@@ -258,7 +258,12 @@ impl GitHubClient for OnlineGitHubClient {
         decoder.read_to_end(&mut content)?;
 
         let mut hasher = nyarr::hash::NarHasher::new();
-        nyarr::tar::tar_to_nar(Cursor::new(&content), &mut hasher).map_err(|e| eyre!(e))?;
+        nyarr::tar::tar_to_nar(
+            Cursor::new(&content),
+            &mut hasher,
+            nyarr::tar::StripRoot::StripRoot,
+        )
+        .map_err(|e| eyre!(e))?;
 
         Ok(Lock {
             owner: owner.into(),

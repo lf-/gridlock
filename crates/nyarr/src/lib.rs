@@ -71,6 +71,10 @@ impl FileName {
         self.0.last()
     }
 
+    pub fn head(&self) -> Option<&PathComponent> {
+        self.0.first()
+    }
+
     pub fn parent(&self) -> Option<FileName> {
         if self.0.len() <= 1 {
             None
@@ -273,6 +277,7 @@ impl<T: ByteStream> FsObject<T> {
                 type_(b"regular", w)?;
                 if let Executable::IsExecutable = exec {
                     str(b"executable", w)?;
+                    str(b"", w)?; // (sic)
                 }
                 str(b"contents", w)?;
                 content.serialise_just(w)?;
@@ -377,9 +382,31 @@ mod tests {
         ])))
     }
 
+    pub fn basic_tree_2() -> FsObject<ConstByteStream> {
+        FsObject::Directory(Directory(BTreeMap::from([
+            dir_entry(
+                b"f",
+                FsObject::File(
+                    Executable::NotExecutable,
+                    ConstByteStream(b"aaa\n".to_vec()),
+                ),
+            ),
+            dir_entry(b"f2", FsObject::Symlink(FileName::singleton(b"f".to_vec()))),
+            dir_entry(
+                b"exe",
+                FsObject::File(Executable::IsExecutable, ConstByteStream(b"nya\n".to_vec())),
+            ),
+        ])))
+    }
+
     #[test]
     fn basic() {
         check_tree(basic_tree(), include_bytes!("testdata/test1.nar"));
+    }
+
+    #[test]
+    fn basic_exe() {
+        check_tree(basic_tree_2(), include_bytes!("testdata/test2.nar"));
     }
 
     #[test]
