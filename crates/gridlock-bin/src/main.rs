@@ -27,9 +27,13 @@ struct Update {
 struct Add {
     /// Owner/repo pair. For example, `lf-/gridlock`.
     repo_ref: String,
+
     /// Branch to use. By default we will use the default branch.
+    #[clap(long)]
     branch: Option<String>,
+
     /// Name to use for this package. Defaults to the repository name.
+    #[clap(long)]
     name: Option<String>,
 }
 
