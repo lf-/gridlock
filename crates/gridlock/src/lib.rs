@@ -13,7 +13,7 @@ use chrono::Utc;
 use color_eyre::eyre::{eyre, Context};
 use regex::Regex;
 use serde::{de::Visitor, Deserialize, Serialize, Serializer};
-use serde_json::Value;
+pub use serde_json::Value;
 use tokio::{fs, io::AsyncWriteExt};
 
 const LOCKFILE_VERSION: u16 = 0;

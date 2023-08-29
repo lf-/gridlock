@@ -1,9 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{btree_map::Entry, HashSet},
+    path::{Path, PathBuf},
+};
 
 use color_eyre::eyre::eyre;
 use gridlock::{
     plan_update, read_lockfile, write_lockfile, GitHubClient, Lock, Lockfile, LockfileChange,
-    OnlineGitHubClient,
+    OnlineGitHubClient, Value,
 };
 use owo_colors::OwoColorize;
 
@@ -38,11 +41,42 @@ struct Add {
 }
 
 #[derive(clap::Parser)]
+struct MetaSetInsert {
+    /// Package name to edit.
+    package_name: String,
+    /// Name of the metadata entry to modify.
+    meta_name: String,
+    /// Things to insert into the set.
+    #[clap(num_args = 1..)]
+    value: Vec<String>,
+}
+
+#[derive(clap::Parser)]
+struct MetaSet {
+    /// Package name to edit.
+    package_name: String,
+    /// Name of the metadata item.
+    meta_name: String,
+    /// String to set it to.
+    value: String,
+}
+
+#[derive(clap::Parser)]
+enum Meta {
+    /// Insert into an exclusive set maintained as a list.
+    SetInsert(MetaSetInsert),
+    /// Sets a metadata item to a string.
+    Set(MetaSet),
+}
+
+#[derive(clap::Parser)]
 enum Subcommand {
     Update(Update),
     Show,
     Add(Add),
     Init,
+    #[clap(subcommand)]
+    Meta(Meta),
 }
 
 fn boldprint(head: &str, f: impl std::fmt::Display) {
@@ -130,8 +164,23 @@ async fn do_add(lockfile_path: &Path, add: Add) -> color_eyre::Result<()> {
     println!("Adding {owner}/{repo} at {branch_name}: {head}");
     let lock = client.create_lock(owner, repo, &branch_name, &head).await?;
 
-    // FIXME: should "add" update?
-    lockfile.packages.insert(item_name, lock);
+    let old = lockfile.packages.entry(item_name);
+    // Maintain extra information across multiple adds.
+    match old {
+        Entry::Vacant(ve) => {
+            ve.insert(lock);
+        }
+        Entry::Occupied(occ) => {
+            let (k, prev) = occ.remove_entry();
+            lockfile.packages.insert(
+                k,
+                Lock {
+                    extra: prev.extra,
+                    ..lock
+                },
+            );
+        }
+    }
 
     write_lockfile(lockfile_path, &lockfile).await?;
 
@@ -145,6 +194,57 @@ async fn do_init(lockfile_path: &Path) -> color_eyre::Result<()> {
     Ok(())
 }
 
+async fn do_meta(lockfile_path: &Path, meta: Meta) -> color_eyre::Result<()> {
+    let mut lockfile = read_lockfile(lockfile_path).await?;
+
+    match meta {
+        Meta::SetInsert(MetaSetInsert {
+            package_name,
+            meta_name,
+            value,
+        }) => {
+            let entry = lockfile
+                .packages
+                .get_mut(&package_name)
+                .ok_or_else(|| eyre!("Specified package does not exist"))?;
+            let mut temp = Value::Array(vec![]);
+            let val = entry
+                .extra
+                .get_mut(&meta_name)
+                .unwrap_or(&mut temp)
+                .as_array_mut()
+                .ok_or_else(|| eyre!("Wrong type of metadata, expected array"))?;
+            let content = std::mem::take(val);
+            let set = content
+                .into_iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s),
+                    _ => None,
+                })
+                .collect::<HashSet<String>>();
+            let to_insert = value.into_iter().collect::<HashSet<String>>();
+
+            let set = set.union(&to_insert).cloned().collect::<HashSet<String>>();
+
+            *val = set.into_iter().map(Value::String).collect::<Vec<_>>();
+        }
+        Meta::Set(MetaSet {
+            package_name,
+            meta_name,
+            value,
+        }) => {
+            let entry = lockfile
+                .packages
+                .get_mut(&package_name)
+                .ok_or_else(|| eyre!("Specified package does not exist"))?;
+            entry.extra.insert(meta_name, Value::String(value));
+        }
+    }
+
+    write_lockfile(lockfile_path, &lockfile).await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
@@ -155,5 +255,6 @@ async fn main() -> color_eyre::Result<()> {
         Subcommand::Show => do_show(&args.lockfile).await,
         Subcommand::Add(a) => do_add(&args.lockfile, a).await,
         Subcommand::Init => do_init(&args.lockfile).await,
+        Subcommand::Meta(meta) => do_meta(&args.lockfile, meta).await,
     }
 }
